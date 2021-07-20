@@ -1,7 +1,5 @@
 package com.sriram.kafka.streams.banktransactionschecker.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sriram.kafka.streams.banktransactionschecker.common.Constants;
 import com.sriram.kafka.streams.banktransactionschecker.model.BankTransferDTO;
 import com.sriram.kafka.streams.banktransactionschecker.model.CurrencyLimit;
@@ -11,7 +9,6 @@ import com.sriram.kafka.streams.banktransactionschecker.serde.WrapperSerde;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.Consumed;
@@ -19,15 +16,15 @@ import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Produced;
 
+import java.time.Duration;
 import java.util.Properties;
+import java.util.concurrent.CountDownLatch;
 
 public class TransferLimitChecker {
     public static void main(String[] args) throws InterruptedException {
         Properties properties = new Properties();
         properties.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
         properties.put(StreamsConfig.APPLICATION_ID_CONFIG, "transferLimitChecker");
-        //properties.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
-        //properties.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
         StreamsBuilder builder = new StreamsBuilder();
@@ -45,14 +42,23 @@ public class TransferLimitChecker {
 
         });
         filteredTransactions.to(Constants.OUTPUT_TOPIC,  Produced.with(Serdes.String(), new BankTransferDTOSerde()));
+        final CountDownLatch latch = new CountDownLatch(1);
+        KafkaStreams streams = new KafkaStreams(builder.build(), properties);
+        try {
 
-        try (KafkaStreams streams = new KafkaStreams(builder.build(), properties)) {
-
+            Runtime.getRuntime().addShutdownHook(new Thread("streams-shutdown-hook") {
+                @Override
+                public void run() {
+                    streams.close(Duration.ofSeconds(5));
+                    latch.countDown();
+                }
+            });
             streams.cleanUp();
             streams.start();
+            latch.await();
 
-            Thread.sleep(10000);
-
+        } finally {
+            streams.close();
         }
 
     }
